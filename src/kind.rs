@@ -1,5 +1,30 @@
+// 用户解析`anyhow!($expr)`行为的标签分发机制.
+// <br>
 // Tagged dispatch mechanism for resolving the behavior of `anyhow!($expr)`.
 //
+// $expr有三种可能类型,分别实现以下三个特征,特征提供了方法anyhow_kind()返回三种单元值[Adhoc|Trait|Boxed]
+// - AdhocKind 实现者: 实现了Debug+Display的类型 T: ?Sized + Display + Debug + Send + Sync + 'static {}
+// - TraitKind 实现者: 实现了Into<anyhow::Error>类型,或anyhow::Error实现的From<E>类型
+// - BoxedKind 实现者: 盒装的StdError对象, Box<dyn StdError + Send + Sync>
+//
+// 三种单元值都提供了new()方法创建anyhow::Error实例
+// - Adhoc::new(...) 传入 T: ?Sized + Display + Debug + Send + Sync + 'static {}
+// - Trait::new(...) 传入 E: Into<anyhow::Error>
+// - Boxed::new(...) 传入 Box<dyn StdError + Send + Sync>
+//
+// 总结起来:
+// - 1.创建anyhow::Error有三种可能的输入类型,分别为他们实现特征: AdhocKind,TraitKind,BoxedKind
+// - 2.三种特征都提供了anyhow_kind()方法,以获取到三种对应的单元值: Adhoc,Trait,Boxed
+// - 3.三个单元值提都供了从其对应的类型创建anyhow::Error的方法new(...)传入对应的类型值,创建出了anyhow::Error实例
+//
+// 三种单元值创建anyhow::Error实例时底层分别用了三种方法
+// - 1.Adhoc::new: Error::from_adhoc(msg, backtrace)
+// - 2.Trait::new: error.into()
+// - 3.Boxed::new: Error::from_boxed(msg, backtrace)
+//
+// anyhow!()传入的表达式的值必须实现Debug和Display.
+// 当传入表达式同时还实现了std::error::Error,则最终的anyhow::Error承接它的source()和backtrace().
+// <br>
 // When anyhow! is given a single expr argument to turn into anyhow::Error, we
 // want the resulting Error to pick up the input's implementation of source()
 // and backtrace() if it has a std::error::Error impl, otherwise require nothing
@@ -50,6 +75,8 @@ use core::fmt::{Debug, Display};
 #[cfg(feature = "std")]
 use crate::StdError;
 
+/// AdhocKind 实现者: 实现了Debug+Display的类型 T: ?Sized + Display + Debug + Send + Sync + 'static {}
+///
 pub struct Adhoc;
 
 #[doc(hidden)]
@@ -72,6 +99,7 @@ impl Adhoc {
     }
 }
 
+/// TraitKind 实现者: 实现了Into<anyhow::Error>类型,或anyhow::Error实现的From<E>类型
 pub struct Trait;
 
 #[doc(hidden)]
@@ -94,6 +122,7 @@ impl Trait {
     }
 }
 
+/// BoxedKind 实现者: 盒装的StdError对象, Box<dyn StdError + Send + Sync>
 #[cfg(feature = "std")]
 pub struct Boxed;
 

@@ -1,3 +1,4 @@
+/// 直接创建Err并函数返回,等于: return Err(x)
 /// Return early with an error.
 ///
 /// This macro is equivalent to `return Err(`[`anyhow!($args...)`][anyhow!]`)`.
@@ -158,9 +159,16 @@ macro_rules! ensure {
     };
 }
 
+/// 从"字符串"或"非anyhow::Error值"创建一个anyhow::Error实例.
+/// <br>
 /// Construct an ad-hoc error from a string or existing non-`anyhow` error
 /// value.
 ///
+/// 可以传入:
+/// - 字符串
+/// - 格式化字符串+参数列表
+/// - 实现了Debug和Display的任意自定义类型的值..如果此类型还实现了std::error::Error则将其source用作anyhow::Error的source
+/// 
 /// This evaluates to an [`Error`][crate::Error]. It can take either just a
 /// string, or a format string with arguments. It also can take any custom type
 /// which implements `Debug` and `Display`.
@@ -188,12 +196,14 @@ macro_rules! ensure {
 /// ```
 #[macro_export]
 macro_rules! anyhow {
+    // 传入字符串
     ($msg:literal $(,)?) => {
         $crate::__private::must_use({
             let error = $crate::__private::format_err($crate::__private::format_args!($msg));
             error
         })
     };
+    // 传入表达式
     ($err:expr $(,)?) => {
         $crate::__private::must_use({
             use $crate::__private::kind::*;
@@ -203,6 +213,7 @@ macro_rules! anyhow {
             error
         })
     };
+    // 传入格式化字符串+参数列表
     ($fmt:expr, $($arg:tt)*) => {
         $crate::Error::msg($crate::__private::format!($fmt, $($arg)*))
     };

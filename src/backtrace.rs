@@ -1,9 +1,28 @@
+//! ## 模块说明
+//! 在build.rs中对rust版本做三个功能探测都成功后导入cfg(backtrace)配置项:
+//! - 是否可以导入backtrace模块
+//! - 是否有request_ref函数
+//! - 是否Error特征支持provide方法
+//! 满足以上三个条件说明当前rust版本支持backstrace功能
+//!
+//! ## 在build.rs中的探测方法:
+//! - 写一段包含以上三个语法点的代码
+//! - 通过rustc执行这段代码看是否报错
+//!
+//! ## 探测结果:
+//! - 报错了,则说明标准库不支持backtrace,则不导入cfg(backtrace)...这时候需要自己写backstrace模块,但是即使有了也不一定好使,只能解决第一个问题..
+//! - 不报错,则说明标准库支持backtrace,则导入cfg(backtrace)...可正常使用标准库中Error处理backtrace的功能
+
+/// 如果当前rust版本支持backtrace(即provide方法),则引入标准库的backtrace模块
 #[cfg(backtrace)]
 pub(crate) use std::backtrace::{Backtrace, BacktraceStatus};
 
+/// 如果当前Rust版本不支持backtrace但是feature又传入了backtrace,引入当前自定义的backtrace模块.
 #[cfg(all(not(backtrace), feature = "backtrace"))]
 pub(crate) use self::capture::{Backtrace, BacktraceStatus};
 
+/// 如果当前Rust版本不支持backtrace,并且又没有传入feature,则定义一个空的Backtrace类型.
+/// 这说明用户铁了心不需要backtrace功能.
 #[cfg(not(any(backtrace, feature = "backtrace")))]
 pub(crate) enum Backtrace {}
 
@@ -21,6 +40,7 @@ macro_rules! impl_backtrace {
     };
 }
 
+/// 如果rust版本backtrace或传入了backtrace特性,则捕获Backtrace值
 #[cfg(any(backtrace, feature = "backtrace"))]
 macro_rules! backtrace {
     () => {
@@ -28,6 +48,7 @@ macro_rules! backtrace {
     };
 }
 
+/// 如果rust版本不支持backtrace且未传入了backtrace特性,则捕获Backtrace值为None
 #[cfg(not(any(backtrace, feature = "backtrace")))]
 macro_rules! backtrace {
     () => {
@@ -35,6 +56,9 @@ macro_rules! backtrace {
     };
 }
 
+/// 在rust版本支持backtrace时,尝试获取当前Error对象的backtrace值
+/// - 如果获取到了,则什么都不做并返回None
+/// - 如果没获取到,则在当前位置捕获backtrace并返回
 #[cfg(backtrace)]
 macro_rules! backtrace_if_absent {
     ($err:expr) => {
@@ -45,6 +69,7 @@ macro_rules! backtrace_if_absent {
     };
 }
 
+/// 如果rust版本不支持backtrace + 开启了std特性 + 开启了backtrace特性, 则求Backtrace值
 #[cfg(all(feature = "std", not(backtrace), feature = "backtrace"))]
 macro_rules! backtrace_if_absent {
     ($err:expr) => {
@@ -52,6 +77,7 @@ macro_rules! backtrace_if_absent {
     };
 }
 
+/// 如果rust版本不支持backtrace + 开启了std特性 + 未开启backtrace特性, 则求Backtrace值为None
 #[cfg(all(feature = "std", not(backtrace), not(feature = "backtrace")))]
 macro_rules! backtrace_if_absent {
     ($err:expr) => {
@@ -59,6 +85,8 @@ macro_rules! backtrace_if_absent {
     };
 }
 
+/// 当rust版本不支持backtrace + 开启了backtrace特性
+/// 这里相当于把标准库的backstrace模块代码拷贝了一遍
 #[cfg(all(not(backtrace), feature = "backtrace"))]
 mod capture {
     use backtrace::{BacktraceFmt, BytesOrWideString, Frame, PrintFmt, SymbolName};
@@ -395,6 +423,7 @@ mod capture {
     }
 }
 
+/// 断言Backtrace是否实现Send+Sync
 fn _assert_send_sync() {
     fn _assert<T: Send + Sync>() {}
     _assert::<Backtrace>();

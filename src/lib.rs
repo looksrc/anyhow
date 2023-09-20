@@ -269,7 +269,13 @@ trait StdError: Debug + Display {
 #[doc(no_inline)]
 pub use anyhow as format_err;
 
+/// 动态错误类型的的包装.
 /// The `Error` type, a wrapper around a dynamic error type.
+///
+/// 此类型与`Box<dyn std::error::Error>`功能类似,区别如下:
+/// - Error 必须是 `Send`, `Sync`, and `'static` 的
+/// - Error 确保backtrace可用,即使底层错误类型没有提供backtrace.
+/// - Error 表现为一个瘦指针,仅占用一个字节.
 ///
 /// `Error` works a lot like `Box<dyn std::error::Error>`, but with these
 /// differences:
@@ -282,8 +288,11 @@ pub use anyhow as format_err;
 ///
 /// <br>
 ///
+/// # 显示
 /// # Display representations
 ///
+/// 当通过"{}"或to_string()打印错误时,仅会打印最外层的底层错误或上下文,不打印cause.
+/// 等于是直接调用了构造anyhow::Error时传入的错误的Display实现.<br>
 /// When you print an error object using "{}" or to_string(), only the outermost
 /// underlying error or context is printed, not any of the lower level causes.
 /// This is exactly as if you had called the Display impl of the error from
@@ -293,6 +302,7 @@ pub use anyhow as format_err;
 /// Failed to read instrs from ./path/to/instrs.json
 /// ```
 ///
+/// "{:#}",使用anyhow的默认格式打印cause. <br>
 /// To print causes as well using anyhow's default formatting of causes, use the
 /// alternate selector "{:#}".
 ///
@@ -300,6 +310,7 @@ pub use anyhow as format_err;
 /// Failed to read instrs from ./path/to/instrs.json: No such file or directory (os error 2)
 /// ```
 ///
+/// "{:?}",打印backtrace.这是main函数返回的错误的默认打印形式. <br>
 /// The Debug format "{:?}" includes your backtrace if one was captured. Note
 /// that this is the representation you get by default if you return an error
 /// from `fn main` instead of printing it explicitly yourself.
@@ -311,6 +322,7 @@ pub use anyhow as format_err;
 ///     No such file or directory (os error 2)
 /// ```
 ///
+/// 如果存在backtrace: <br>
 /// and if there is a backtrace available:
 ///
 /// ```console
@@ -335,6 +347,7 @@ pub use anyhow as format_err;
 ///    7: _start
 /// ```
 ///
+/// "{:#?}", 打印传统的结构化日志:<br>
 /// To see a conventional struct-style Debug representation, use "{:#?}".
 ///
 /// ```console
@@ -348,6 +361,7 @@ pub use anyhow as format_err;
 /// }
 /// ```
 ///
+/// 如果不满意以上的打印形式,可以自己渲染错误以及它的cause链:<br>
 /// If none of the built-in representations are appropriate and you would prefer
 /// to render the error and its cause chain yourself, it can be done something
 /// like this:
@@ -452,8 +466,11 @@ pub struct Chain<'a> {
 /// ```
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
+/// 为`Result`提供`context`方法.
+/// <br>
 /// Provides the `context` method for `Result`.
 ///
+/// 此特征已封闭,本库之外不能实现它
 /// This trait is sealed and cannot be implemented for types outside of
 /// `anyhow`.
 ///
@@ -599,11 +616,15 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 ///     }
 ///     ```
 pub trait Context<T, E>: context::private::Sealed {
+    /// 为错误值添加额外的上下文
+    /// <br>
     /// Wrap the error value with additional context.
     fn context<C>(self, context: C) -> Result<T, Error>
     where
         C: Display + Send + Sync + 'static;
 
+    /// 为错误值添加额外的上下文,其中上下文的内容使用惰性求值.
+    /// <br>
     /// Wrap the error value with additional context that is evaluated lazily
     /// only once an error does occur.
     fn with_context<C, F>(self, f: F) -> Result<T, Error>
@@ -635,7 +656,8 @@ pub fn Ok<T>(t: T) -> Result<T> {
     Result::Ok(t)
 }
 
-// Not public API. Referenced by macro-generated code.
+/// 非公开API,专门给宏用的<br>
+/// Not public API. Referenced by macro-generated code.
 #[doc(hidden)]
 pub mod __private {
     use crate::Error;
@@ -661,6 +683,9 @@ pub mod __private {
         pub use crate::kind::BoxedKind;
     }
 
+    /// 从提供的格式化字符串来创建Error实例
+    /// - 如果提供的是纯静态内容则转为&'static str
+    /// - 如果提供的是格式化字符串则执行格式化后转为String
     #[doc(hidden)]
     #[inline]
     #[cold]
@@ -679,6 +704,7 @@ pub mod __private {
         }
     }
 
+    /// 传入再传出,将值移动了一次,强迫值被使用一次,实际啥也没做
     #[doc(hidden)]
     #[inline]
     #[cold]

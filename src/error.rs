@@ -606,6 +606,7 @@ struct ErrorVTable {
     object_backtrace: unsafe fn(Ref<ErrorImpl>) -> Option<&Backtrace>,
 }
 
+// 遗弃整个ErrorImpl实例,包括内部字段_object
 // Safety: requires layout of *e to match ErrorImpl<E>.
 unsafe fn object_drop<E>(e: Own<ErrorImpl>) {
     // Cast back to ErrorImpl<E> so that the allocator receives the correct
@@ -614,6 +615,7 @@ unsafe fn object_drop<E>(e: Own<ErrorImpl>) {
     drop(unerased);
 }
 
+// 遗弃ErrorImpl实例,但是保持内部字段_object内容不被遗弃
 // Safety: requires layout of *e to match ErrorImpl<E>.
 unsafe fn object_drop_front<E>(e: Own<ErrorImpl>, target: TypeId) {
     // Drop the fields of ErrorImpl other than E as well as the Box allocation,
@@ -624,6 +626,9 @@ unsafe fn object_drop_front<E>(e: Own<ErrorImpl>, target: TypeId) {
     drop(unerased);
 }
 
+// 获取到ErrorImpl._object并转为特征对象
+// 1.将擦除_object的Ref<ErrorImpl<()>> 恢复为 Ref<ErrorImpl<E>>
+// 2.从Ref<ErrorImpl<E>>提取到字段_object的指针Ref<E>,再转为特征对象Ref<dyn StdError>
 // Safety: requires layout of *e to match ErrorImpl<E>.
 unsafe fn object_ref<E>(e: Ref<ErrorImpl>) -> Ref<dyn StdError + Send + Sync + 'static>
 where
@@ -631,8 +636,10 @@ where
 {
     // Attach E's native StdError vtable onto a pointer to self._object.
 
+    // 通过强转将ErrorImpl中的_object=()恢复为_object=E
     let unerased = e.cast::<ErrorImpl<E>>();
 
+    // 从ErrorImpl中提取到_object:E的地址并包装为特征对象
     #[cfg(not(anyhow_no_ptr_addr_of))]
     return Ref::from_raw(NonNull::new_unchecked(
         ptr::addr_of!((*unerased.as_ptr())._object) as *mut E,
@@ -642,6 +649,7 @@ where
     return Ref::new(&unerased.deref()._object);
 }
 
+// 取ErrorImpl._object转为特征对象后的可变引用
 // Safety: requires layout of *e to match ErrorImpl<E>, and for `e` to be derived
 // from a `&mut`
 #[cfg(all(feature = "std", anyhow_no_ptr_addr_of))]
@@ -653,6 +661,7 @@ where
     &mut e.cast::<ErrorImpl<E>>().deref_mut()._object
 }
 
+// 将ErrorImpl._object=()恢复为ErrorImpl._object=E,并转为特征对象并装盒
 // Safety: requires layout of *e to match ErrorImpl<E>.
 unsafe fn object_boxed<E>(e: Own<ErrorImpl>) -> Box<dyn StdError + Send + Sync + 'static>
 where
@@ -662,6 +671,7 @@ where
     e.cast::<ErrorImpl<E>>().boxed()
 }
 
+// 将ErrorImpl._object=()恢复为ErrorImpl._object=E,取出_object的地址创建Ref<E>并强转为Ref<()>,等于擦除了E类型信息.
 // Safety: requires layout of *e to match ErrorImpl<E>.
 unsafe fn object_downcast<E>(e: Ref<ErrorImpl>, target: TypeId) -> Option<Ref<()>>
 where
@@ -688,6 +698,7 @@ where
     }
 }
 
+// 将ErrorImpl._object=()恢复为ErrorImpl._object=E,取出_object的地址创建Mut<E>并强转为Mut<()>,等于擦除了E类型信息.
 // Safety: requires layout of *e to match ErrorImpl<E>.
 #[cfg(anyhow_no_ptr_addr_of)]
 unsafe fn object_downcast_mut<E>(e: Mut<ErrorImpl>, target: TypeId) -> Option<Mut<()>>
@@ -710,6 +721,7 @@ fn no_backtrace(e: Ref<ErrorImpl>) -> Option<&Backtrace> {
     None
 }
 
+// 将ErrorImpl._object=()恢复为ErrorImpl._object=ContextError,取出ContextError.context字段的地址创建Ref<C>并强转为Ref<C>,等于擦除了C类型信息.
 // Safety: requires layout of *e to match ErrorImpl<ContextError<C, E>>.
 #[cfg(feature = "std")]
 unsafe fn context_downcast<C, E>(e: Ref<ErrorImpl>, target: TypeId) -> Option<Ref<()>>
@@ -728,6 +740,7 @@ where
     }
 }
 
+// 将ErrorImpl._object=()恢复为ErrorImpl._object=ContextError,取出ContextError.context字段的地址创建Mut<C>并强转为Mut<C>,等于擦除了C类型信息.
 // Safety: requires layout of *e to match ErrorImpl<ContextError<C, E>>.
 #[cfg(all(feature = "std", anyhow_no_ptr_addr_of))]
 unsafe fn context_downcast_mut<C, E>(e: Mut<ErrorImpl>, target: TypeId) -> Option<Mut<()>>
@@ -837,25 +850,35 @@ where
     Some(backtrace)
 }
 
+// 注意: 使用`ErrorImpl<()>`应当避免引用, 支持裸指针和`NonNull`.
 // NOTE: If working with `ErrorImpl<()>`, references should be avoided in favor
 // of raw pointers and `NonNull`.
+//
+// repr C 确保结构体中各元素排序与书写一致.
 // repr C to ensure that E remains in the final position.
 #[repr(C)]
 pub(crate) struct ErrorImpl<E = ()> {
     vtable: &'static ErrorVTable,
     backtrace: Option<Backtrace>,
+    // 注意: 不要直接使用此元素.仅通过虚表来操作它.已擦除的类型可能具有不同的对齐量.
     // NOTE: Don't use directly. Use only through vtable. Erased type may have
     // different alignment.
     _object: E,
 }
 
+// 从指向ErrorImpl<E = ()>的裸指针中获取到虚表的引用.
 // Reads the vtable out of `p`. This is the same as `p.as_ref().vtable`, but
 // avoids converting `p` into a reference.
 unsafe fn vtable(p: NonNull<ErrorImpl>) -> &'static ErrorVTable {
+    // 安全声明: ErrorVTable 必须是 ErrorImpl 的首个字段..由repr C保障
     // NOTE: This assumes that `ErrorVTable` is the first field of ErrorImpl.
     *(p.as_ptr() as *const &'static ErrorVTable)
 }
 
+// repr C 确保以下布局相同:
+// - ContextError<C, E>
+// - ContextError<ManuallyDrop<C>, E>
+// - ContextError<C, ManuallyDrop<E>>
 // repr C to ensure that ContextError<C, E> has the same layout as
 // ContextError<ManuallyDrop<C>, E> and ContextError<C, ManuallyDrop<E>>.
 #[repr(C)]
@@ -865,6 +888,9 @@ pub(crate) struct ContextError<C, E> {
 }
 
 impl<E> ErrorImpl<E> {
+    /// 擦除E的具体类型变成单元值,保留虚表.
+    /// 虚表负责操作返回的指针,与"移除固定尺寸强转"类似.
+    /// U=ErrorImpl<E=()> U::Target=ErrorImpl<E=()>
     fn erase(&self) -> Ref<ErrorImpl> {
         // Erase the concrete type of E but preserve the vtable in self.vtable
         // for manipulating the resulting thin pointer. This is analogous to an
@@ -874,12 +900,16 @@ impl<E> ErrorImpl<E> {
 }
 
 impl ErrorImpl {
+    /// 从Ref<ErrorImpl>获取到ErrorImpl._object的特征对象.<br>
+    /// 等于是为_object添加了一个StdError特征的虚表
     pub(crate) unsafe fn error(this: Ref<Self>) -> &(dyn StdError + Send + Sync + 'static) {
         // Use vtable to attach E's native StdError vtable for the right
         // original type E.
         (vtable(this.ptr).object_ref)(this).deref()
     }
 
+    /// 从Mut<ErrorImpl>获取到ErrorImpl._object的特征对象.<br>
+    /// 等于是为_object添加了一个StdError特征的虚表
     #[cfg(feature = "std")]
     pub(crate) unsafe fn error_mut(this: Mut<Self>) -> &mut (dyn StdError + Send + Sync + 'static) {
         // Use vtable to attach E's native StdError vtable for the right
@@ -962,6 +992,7 @@ impl From<Error> for Box<dyn StdError + Send + Sync + 'static> {
     fn from(error: Error) -> Self {
         let outer = ManuallyDrop::new(error);
         unsafe {
+            // 使用vtable函数将ErrorImpl<E>的固有StdError虚表附加给原初类型E
             // Use vtable to attach ErrorImpl<E>'s native StdError vtable for
             // the right original type E.
             (vtable(outer.inner.ptr).object_boxed)(outer.inner)
